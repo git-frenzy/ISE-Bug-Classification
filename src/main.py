@@ -1,5 +1,6 @@
 import os
 import random
+import time
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -119,17 +120,20 @@ def make_baseline():
     ])
 
 
-def make_solution():
+def make_solution(use_word=True, use_char=True, use_stats=True, word_ngram=(1, 2)):
+    parts = []
+    if use_word:
+        parts.append(('w', TfidfVectorizer(max_features=50000, ngram_range=word_ngram,
+                                           sublinear_tf=True, stop_words='english',
+                                           min_df=2)))
+    if use_char:
+        parts.append(('c', TfidfVectorizer(max_features=30000, ngram_range=(2, 4),
+                                           sublinear_tf=True, analyzer='char_wb',
+                                           min_df=3)))
+    if use_stats:
+        parts.append(('s', TextStats()))
     return Pipeline([
-        ('feat', FeatureUnion([
-            ('w', TfidfVectorizer(max_features=50000, ngram_range=(1, 2),
-                                  sublinear_tf=True, stop_words='english',
-                                  min_df=2)),
-            ('c', TfidfVectorizer(max_features=30000, ngram_range=(2, 4),
-                                  sublinear_tf=True, analyzer='char_wb',
-                                  min_df=3)),
-            ('s', TextStats()),
-        ])),
+        ('feat', FeatureUnion(parts)),
         ('scale', MaxAbsScaler()),
         ('clf', LinearSVC(C=1.0, max_iter=50000, tol=1e-3, random_state=SEED)),
     ])
@@ -217,11 +221,40 @@ if __name__ == '__main__':
 
     print('\nHeld-out 80/20 evaluation')
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, stratify=y, random_state=SEED)
+    timing = []
     for name, mk in [('baseline', make_baseline), ('solution', make_solution)]:
         clf = mk()
-        clf.fit(Xtr, ytr)
-        pred = clf.predict(Xte)
+        t0 = time.perf_counter(); clf.fit(Xtr, ytr); t_fit = time.perf_counter() - t0
+        t0 = time.perf_counter(); pred = clf.predict(Xte); t_pred = time.perf_counter() - t0
         a, f, m = score(yte, pred)
-        print(f'  [{name}] Acc={a:.4f}  F1={f:.4f}  MCC={m:.4f}')
+        timing.append({'model': name, 'fit_seconds': round(t_fit, 3), 'predict_seconds': round(t_pred, 3)})
+        print(f'  [{name}] Acc={a:.4f}  F1={f:.4f}  MCC={m:.4f}  fit={t_fit:.2f}s  predict={t_pred:.2f}s')
         print(classification_report(yte, pred, target_names=CLASSES, zero_division=0))
         cm_plot(yte, pred, f'results/cm_{name}.png', name.title())
+    pd.DataFrame(timing).to_csv('results/timing.csv', index=False)
+
+    print('\nLow-resource ablation (25 reports per class for training)')
+    configs = [
+        ('full',                     {}),
+        ('no_char_ngram',            {'use_char': False}),
+        ('no_text_stats',            {'use_stats': False}),
+        ('word_unigrams_only',       {'word_ngram': (1, 1)}),
+        ('word_only_no_extras',      {'use_char': False, 'use_stats': False, 'word_ngram': (1, 1)}),
+    ]
+    abl_rng = np.random.RandomState(SEED)
+    by_class = {c: np.where(y == c)[0] for c in np.unique(y)}
+    abl_train = np.concatenate([abl_rng.choice(idx, 25, replace=False) for idx in by_class.values()])
+    abl_test = np.setdiff1d(np.arange(len(y)), abl_train)
+    Xtr_abl = [X[i] for i in abl_train]; ytr_abl = y[abl_train]
+    Xte_abl = [X[i] for i in abl_test];  yte_abl = y[abl_test]
+    abl_rows = []
+    for name, kw in configs:
+        clf = make_solution(**kw)
+        clf.fit(Xtr_abl, ytr_abl)
+        a, f, m = score(yte_abl, clf.predict(Xte_abl))
+        abl_rows.append({'config': name,
+                         'accuracy': round(a, 4),
+                         'macro_f1': round(f, 4),
+                         'mcc':      round(m, 4)})
+        print(f'  {name:<22s}  Acc={a:.4f}  F1={f:.4f}  MCC={m:.4f}')
+    pd.DataFrame(abl_rows).to_csv('results/ablation.csv', index=False)
