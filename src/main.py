@@ -17,9 +17,14 @@ from sklearn.preprocessing import MaxAbsScaler
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import (accuracy_score, f1_score, matthews_corrcoef,
                              confusion_matrix, classification_report)
+from sklearn.datasets import fetch_20newsgroups
 
 SEED = 42
-CLASSES = ['hardware_bug', 'os_bug', 'platform_bug', 'ui_bug']
+
+# -----------------------------------------------------------------------------
+# Dataset 1: synthetic bug reports
+# -----------------------------------------------------------------------------
+SYN_CLASSES = ['hardware_bug', 'os_bug', 'platform_bug', 'ui_bug']
 
 TEMPLATES = {
     0: [
@@ -78,7 +83,7 @@ DETAILS = ["Reproducible every time with the steps above.",
 VERSIONS = ['10.15', '11.0', '12.1', 'Ventura 13', 'Monterey 12.6', '2.6.32', '5.15', '6.1']
 
 
-def make_dataset(n_per_class=750):
+def make_synthetic(n_per_class=750):
     rng = random.Random(SEED)
     X, y = [], []
     for label, tmpls in TEMPLATES.items():
@@ -93,9 +98,33 @@ def make_dataset(n_per_class=750):
     pairs = list(zip(X, y))
     rng.shuffle(pairs)
     X, y = map(list, zip(*pairs))
-    return X, np.array(y)
+    return X, np.array(y), SYN_CLASSES
 
 
+# -----------------------------------------------------------------------------
+# Dataset 2: 20 Newsgroups, four computer-related categories
+# Mapping back to the bug-class labels used elsewhere:
+#   comp.sys.ibm.pc.hardware  -> hardware_bug
+#   comp.os.ms-windows.misc   -> os_bug
+#   comp.sys.mac.hardware     -> platform_bug
+#   comp.windows.x            -> ui_bug
+# -----------------------------------------------------------------------------
+NEWS_CATS = ['comp.sys.ibm.pc.hardware', 'comp.os.ms-windows.misc',
+             'comp.sys.mac.hardware', 'comp.windows.x']
+NEWS_LABELS = ['hardware_bug', 'os_bug', 'platform_bug', 'ui_bug']
+
+
+def make_newsgroups():
+    d = fetch_20newsgroups(subset='all', categories=NEWS_CATS,
+                           remove=('headers', 'footers', 'quotes'),
+                           random_state=SEED)
+    cat_to_label = {NEWS_CATS.index(c): NEWS_CATS.index(c) for c in NEWS_CATS}
+    return list(d.data), np.array(d.target), NEWS_LABELS
+
+
+# -----------------------------------------------------------------------------
+# Models
+# -----------------------------------------------------------------------------
 class TextStats(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
         return self
@@ -139,6 +168,9 @@ def make_solution(use_word=True, use_char=True, use_stats=True, word_ngram=(1, 2
     ])
 
 
+# -----------------------------------------------------------------------------
+# Evaluation helpers
+# -----------------------------------------------------------------------------
 def score(y_true, y_pred):
     return (accuracy_score(y_true, y_pred),
             f1_score(y_true, y_pred, average='macro', zero_division=0),
@@ -156,24 +188,24 @@ def cv(make_clf, X, y):
     return np.array(a), np.array(f), np.array(m)
 
 
-def cm_plot(y_true, y_pred, path, title):
+def cm_plot(y_true, y_pred, classes, path, title):
     cm = confusion_matrix(y_true, y_pred)
     fig, ax = plt.subplots(figsize=(7, 6))
     im = ax.imshow(cm, cmap=plt.cm.Blues)
     plt.colorbar(im, ax=ax)
-    ax.set_xticks(range(4)); ax.set_yticks(range(4))
-    ax.set_xticklabels(CLASSES, rotation=30, ha='right')
-    ax.set_yticklabels(CLASSES)
+    ax.set_xticks(range(len(classes))); ax.set_yticks(range(len(classes)))
+    ax.set_xticklabels(classes, rotation=30, ha='right')
+    ax.set_yticklabels(classes)
     thr = cm.max() / 2
-    for i in range(4):
-        for j in range(4):
+    for i in range(len(classes)):
+        for j in range(len(classes)):
             ax.text(j, i, str(cm[i, j]), ha='center', va='center',
                     color='white' if cm[i, j] > thr else 'black')
     ax.set_xlabel('Predicted'); ax.set_ylabel('True'); ax.set_title(title)
     plt.tight_layout(); plt.savefig(path, dpi=150, bbox_inches='tight'); plt.close()
 
 
-def boxplot(scores, path):
+def boxplot(scores, path, suptitle):
     fig, ax = plt.subplots(1, 3, figsize=(13, 5))
     for i, (name, b, s) in enumerate(scores):
         bp = ax[i].boxplot([b, s], tick_labels=['Baseline', 'Solution'],
@@ -188,79 +220,96 @@ def boxplot(scores, path):
         ax[i].set_title(name); ax[i].set_ylabel('Score')
         ax[i].set_ylim(max(0.0, lo), min(1.005, hi))
         ax[i].grid(True, axis='y', alpha=0.3)
-    plt.suptitle('10-fold CV: baseline vs solution (per-fold scores)')
+    plt.suptitle(suptitle)
     plt.tight_layout(); plt.savefig(path, dpi=150, bbox_inches='tight'); plt.close()
 
 
-if __name__ == '__main__':
-    os.makedirs('results', exist_ok=True)
-    X, y = make_dataset()
-    print(f'Dataset: {len(X)} reports, {len(set(y))} classes')
-
-    print('\nBaseline (NB + TF-IDF), 10-fold CV')
+def run_dataset(name, X, y, classes, suptitle, with_ablation=True):
+    print(f'\n=== {name.upper()} ({len(X)} reports, {len(classes)} classes) ===')
+    print('Baseline (NB + TF-IDF), 10-fold CV')
     ba, bf, bm = cv(make_baseline, X, y)
     print(f'  Acc {ba.mean():.4f}+/-{ba.std():.4f}  F1 {bf.mean():.4f}+/-{bf.std():.4f}  MCC {bm.mean():.4f}+/-{bm.std():.4f}')
 
-    print('\nSolution (LinearSVC + TF-IDF + char-ngram + stats), 10-fold CV')
+    print('Solution (LinearSVC + TF-IDF + char-ngram + stats), 10-fold CV')
     sa, sf, sm = cv(make_solution, X, y)
     print(f'  Acc {sa.mean():.4f}+/-{sa.std():.4f}  F1 {sf.mean():.4f}+/-{sf.std():.4f}  MCC {sm.mean():.4f}+/-{sm.std():.4f}')
 
-    print('\nWilcoxon signed-rank (two-tailed)')
+    print('Wilcoxon signed-rank (two-tailed)')
     rows = []
-    for name, b, s in [('Accuracy', ba, sa), ('Macro-F1', bf, sf), ('MCC', bm, sm)]:
+    for metric, b, s in [('Accuracy', ba, sa), ('Macro-F1', bf, sf), ('MCC', bm, sm)]:
         if np.allclose(b, s):
-            print(f'  {name}: identical')
-            rows.append({'metric': name, 'W': None, 'p': None, 'significant': False})
+            print(f'  {metric}: identical')
+            rows.append({'dataset': name, 'metric': metric, 'W': None, 'p': None, 'significant': False})
             continue
         W, p = wilcoxon(b, s)
-        print(f'  {name}: W={W:.2f}  p={p:.4f}  {"significant" if p < 0.05 else "not significant"}')
-        rows.append({'metric': name, 'W': W, 'p': p, 'significant': p < 0.05})
+        sig = p < 0.05
+        print(f'  {metric}: W={W:.2f}  p={p:.4f}  {"significant" if sig else "not significant"}')
+        rows.append({'dataset': name, 'metric': metric, 'W': float(W), 'p': float(p), 'significant': sig})
 
-    pd.DataFrame({
+    cv_df = pd.DataFrame({
         'fold': range(1, 11),
         'baseline_accuracy': ba, 'baseline_f1': bf, 'baseline_mcc': bm,
         'solution_accuracy': sa, 'solution_f1': sf, 'solution_mcc': sm,
-    }).to_csv('results/cv_results.csv', index=False)
-    pd.DataFrame(rows).to_csv('results/wilcoxon_results.csv', index=False)
+    })
+    cv_df.to_csv(f'results/cv_{name}.csv', index=False)
     boxplot([('Accuracy', ba, sa), ('Macro-F1', bf, sf), ('MCC', bm, sm)],
-            'results/comparison_boxplot.png')
+            f'results/boxplot_{name}.png', suptitle)
 
-    print('\nHeld-out 80/20 evaluation')
+    print('Held-out 80/20')
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, stratify=y, random_state=SEED)
     timing = []
-    for name, mk in [('baseline', make_baseline), ('solution', make_solution)]:
+    for label, mk in [('baseline', make_baseline), ('solution', make_solution)]:
         clf = mk()
         t0 = time.perf_counter(); clf.fit(Xtr, ytr); t_fit = time.perf_counter() - t0
         t0 = time.perf_counter(); pred = clf.predict(Xte); t_pred = time.perf_counter() - t0
         a, f, m = score(yte, pred)
-        timing.append({'model': name, 'fit_seconds': round(t_fit, 3), 'predict_seconds': round(t_pred, 3)})
-        print(f'  [{name}] Acc={a:.4f}  F1={f:.4f}  MCC={m:.4f}  fit={t_fit:.2f}s  predict={t_pred:.2f}s')
-        print(classification_report(yte, pred, target_names=CLASSES, zero_division=0))
-        cm_plot(yte, pred, f'results/cm_{name}.png', name.title())
-    pd.DataFrame(timing).to_csv('results/timing.csv', index=False)
+        timing.append({'dataset': name, 'model': label,
+                       'fit_seconds': round(t_fit, 3), 'predict_seconds': round(t_pred, 3),
+                       'test_accuracy': round(a, 4), 'test_f1': round(f, 4), 'test_mcc': round(m, 4)})
+        print(f'  [{label}] Acc={a:.4f}  F1={f:.4f}  MCC={m:.4f}  fit={t_fit:.2f}s  predict={t_pred:.2f}s')
+        print(classification_report(yte, pred, target_names=classes, zero_division=0))
+        cm_plot(yte, pred, classes, f'results/cm_{name}_{label}.png', f'{name}: {label}')
 
-    print('\nLow-resource ablation (25 reports per class for training)')
-    configs = [
-        ('full',                     {}),
-        ('no_char_ngram',            {'use_char': False}),
-        ('no_text_stats',            {'use_stats': False}),
-        ('word_unigrams_only',       {'word_ngram': (1, 1)}),
-        ('word_only_no_extras',      {'use_char': False, 'use_stats': False, 'word_ngram': (1, 1)}),
-    ]
-    abl_rng = np.random.RandomState(SEED)
-    by_class = {c: np.where(y == c)[0] for c in np.unique(y)}
-    abl_train = np.concatenate([abl_rng.choice(idx, 25, replace=False) for idx in by_class.values()])
-    abl_test = np.setdiff1d(np.arange(len(y)), abl_train)
-    Xtr_abl = [X[i] for i in abl_train]; ytr_abl = y[abl_train]
-    Xte_abl = [X[i] for i in abl_test];  yte_abl = y[abl_test]
     abl_rows = []
-    for name, kw in configs:
-        clf = make_solution(**kw)
-        clf.fit(Xtr_abl, ytr_abl)
-        a, f, m = score(yte_abl, clf.predict(Xte_abl))
-        abl_rows.append({'config': name,
-                         'accuracy': round(a, 4),
-                         'macro_f1': round(f, 4),
-                         'mcc':      round(m, 4)})
-        print(f'  {name:<22s}  Acc={a:.4f}  F1={f:.4f}  MCC={m:.4f}')
-    pd.DataFrame(abl_rows).to_csv('results/ablation.csv', index=False)
+    if with_ablation:
+        print('Feature contribution check (small training subset)')
+        configs = [('full', {}),
+                   ('no_char_ngram', {'use_char': False}),
+                   ('no_text_stats', {'use_stats': False}),
+                   ('word_unigrams_only', {'word_ngram': (1, 1)}),
+                   ('word_only_no_extras', {'use_char': False, 'use_stats': False, 'word_ngram': (1, 1)})]
+        rng_a = np.random.RandomState(SEED)
+        per_class = 25
+        by_class = {c: np.where(y == c)[0] for c in np.unique(y)}
+        train_idx = np.concatenate([rng_a.choice(idx, per_class, replace=False) for idx in by_class.values()])
+        test_idx = np.setdiff1d(np.arange(len(y)), train_idx)
+        Xtr_a = [X[i] for i in train_idx]; ytr_a = y[train_idx]
+        Xte_a = [X[i] for i in test_idx];  yte_a = y[test_idx]
+        for cname, kw in configs:
+            clf = make_solution(**kw)
+            clf.fit(Xtr_a, ytr_a)
+            a, f, m = score(yte_a, clf.predict(Xte_a))
+            abl_rows.append({'dataset': name, 'config': cname,
+                             'accuracy': round(a, 4), 'macro_f1': round(f, 4), 'mcc': round(m, 4)})
+            print(f'  {cname:<22s}  Acc={a:.4f}  F1={f:.4f}  MCC={m:.4f}')
+
+    return rows, timing, abl_rows
+
+
+if __name__ == '__main__':
+    os.makedirs('results', exist_ok=True)
+
+    Xs, ys, syn_classes = make_synthetic()
+    syn_w, syn_t, syn_a = run_dataset('synthetic', Xs, ys, syn_classes,
+                                      '10-fold CV on synthetic bug-report corpus',
+                                      with_ablation=True)
+
+    Xn, yn, news_classes = make_newsgroups()
+    news_w, news_t, news_a = run_dataset('20news', Xn, yn, news_classes,
+                                         '10-fold CV on 20 Newsgroups (computer categories)',
+                                         with_ablation=False)
+
+    pd.DataFrame(syn_w + news_w).to_csv('results/wilcoxon.csv', index=False)
+    pd.DataFrame(syn_t + news_t).to_csv('results/timing.csv', index=False)
+    pd.DataFrame(syn_a).to_csv('results/ablation.csv', index=False)
+    print('\nAll outputs in results/')

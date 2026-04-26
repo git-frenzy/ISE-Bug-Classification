@@ -1,0 +1,7 @@
+dataset,metric,W,p,significant
+synthetic,Accuracy,0.0,0.001953125,True
+synthetic,Macro-F1,0.0,0.001953125,True
+synthetic,MCC,0.0,0.001953125,True
+20news,Accuracy,20.0,0.796875,False
+20news,Macro-F1,26.0,0.921875,False
+20news,MCC,26.0,0.921875,False

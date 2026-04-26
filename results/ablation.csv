@@ -1,6 +1,6 @@
-config,accuracy,macro_f1,mcc
-full,0.9566,0.9567,0.9421
-no_char_ngram,0.9362,0.9359,0.9152
-no_text_stats,0.9555,0.9557,0.9408
-word_unigrams_only,0.9548,0.955,0.9399
-word_only_no_extras,0.94,0.9399,0.9202
+dataset,config,accuracy,macro_f1,mcc
+synthetic,full,0.9566,0.9567,0.9421
+synthetic,no_char_ngram,0.9362,0.9359,0.9152
+synthetic,no_text_stats,0.9555,0.9557,0.9408
+synthetic,word_unigrams_only,0.9548,0.955,0.9399
+synthetic,word_only_no_extras,0.94,0.9399,0.9202
