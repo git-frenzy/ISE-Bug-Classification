@@ -177,12 +177,18 @@ def boxplot(scores, path):
     fig, ax = plt.subplots(1, 3, figsize=(13, 5))
     for i, (name, b, s) in enumerate(scores):
         bp = ax[i].boxplot([b, s], tick_labels=['Baseline', 'Solution'],
-                           patch_artist=True, widths=0.5)
-        bp['boxes'][0].set_facecolor('#f28b82')
-        bp['boxes'][1].set_facecolor('#81c995')
-        ax[i].set_title(name); ax[i].set_ylabel('Score'); ax[i].set_ylim(0, 1.05)
-        ax[i].grid(True, axis='y', alpha=0.4)
-    plt.suptitle('10-fold CV: baseline vs solution')
+                           patch_artist=True, widths=0.45)
+        bp['boxes'][0].set_facecolor('#9ec5e8')
+        bp['boxes'][1].set_facecolor('#a8d5a3')
+        for j, data in enumerate([b, s], start=1):
+            ax[i].scatter(np.full_like(data, j) + np.random.RandomState(0).uniform(-0.05, 0.05, len(data)),
+                          data, color='black', s=18, alpha=0.6, zorder=3)
+        lo = min(b.min(), s.min()) - 0.01
+        hi = max(b.max(), s.max()) + 0.005
+        ax[i].set_title(name); ax[i].set_ylabel('Score')
+        ax[i].set_ylim(max(0.0, lo), min(1.005, hi))
+        ax[i].grid(True, axis='y', alpha=0.3)
+    plt.suptitle('10-fold CV: baseline vs solution (per-fold scores)')
     plt.tight_layout(); plt.savefig(path, dpi=150, bbox_inches='tight'); plt.close()
 
 
