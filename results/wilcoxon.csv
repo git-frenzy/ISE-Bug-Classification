@@ -1,7 +1,7 @@
-dataset,metric,W,p,significant
-synthetic,Accuracy,0.0,0.001953125,True
-synthetic,Macro-F1,0.0,0.001953125,True
-synthetic,MCC,0.0,0.001953125,True
-20news,Accuracy,20.0,0.796875,False
-20news,Macro-F1,26.0,0.921875,False
-20news,MCC,26.0,0.921875,False
+dataset,metric,W,p,rank_biserial_r,effect_size_label,significant
+synthetic,Accuracy,0.0,0.001953125,1.0,large,True
+synthetic,Macro-F1,0.0,0.001953125,1.0,large,True
+synthetic,MCC,0.0,0.001953125,1.0,large,True
+20news,Accuracy,23.0,0.6953125,0.1636,small,False
+20news,Macro-F1,23.0,0.6953125,0.1636,small,False
+20news,MCC,23.0,0.6953125,0.1636,small,False

@@ -14,7 +14,7 @@ from sklearn.naive_bayes import MultinomialNB
 from sklearn.svm import LinearSVC
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.preprocessing import MaxAbsScaler
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.model_selection import StratifiedKFold, train_test_split, GridSearchCV
 from sklearn.metrics import (accuracy_score, f1_score, matthews_corrcoef,
                              confusion_matrix, classification_report)
 from sklearn.datasets import fetch_20newsgroups
@@ -118,7 +118,6 @@ def make_newsgroups():
     d = fetch_20newsgroups(subset='all', categories=NEWS_CATS,
                            remove=('headers', 'footers', 'quotes'),
                            random_state=SEED)
-    cat_to_label = {NEWS_CATS.index(c): NEWS_CATS.index(c) for c in NEWS_CATS}
     return list(d.data), np.array(d.target), NEWS_LABELS
 
 
@@ -177,6 +176,24 @@ def score(y_true, y_pred):
             matthews_corrcoef(y_true, y_pred))
 
 
+def tune_solution(X, y):
+    """Small grid search over the SVC C parameter on a 75/25 internal split.
+    Returns the best C value found by Macro-F1."""
+    Xtr, Xva, ytr, yva = train_test_split(X, y, test_size=0.25, stratify=y, random_state=SEED)
+    grid = [0.1, 0.5, 1.0, 2.0, 5.0]
+    best_c, best_f = grid[0], -1.0
+    rows = []
+    for c in grid:
+        clf = make_solution()
+        clf.set_params(clf__C=c)
+        clf.fit(Xtr, ytr)
+        f = f1_score(yva, clf.predict(Xva), average='macro', zero_division=0)
+        rows.append({'C': c, 'val_macro_f1': round(f, 4)})
+        if f > best_f:
+            best_f, best_c = f, c
+    return best_c, rows
+
+
 def cv(make_clf, X, y):
     skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=SEED)
     a, f, m = [], [], []
@@ -226,25 +243,51 @@ def boxplot(scores, path, suptitle):
 
 def run_dataset(name, X, y, classes, suptitle, with_ablation=True):
     print(f'\n=== {name.upper()} ({len(X)} reports, {len(classes)} classes) ===')
+
+    print('Hyperparameter search for solution (LinearSVC C)')
+    best_c, hpo_rows = tune_solution(X, y)
+    print(f'  best C={best_c}')
+    pd.DataFrame(hpo_rows).to_csv(f'results/hpo_{name}.csv', index=False)
+    def tuned_solution():
+        clf = make_solution()
+        clf.set_params(clf__C=best_c)
+        return clf
+
     print('Baseline (NB + TF-IDF), 10-fold CV')
     ba, bf, bm = cv(make_baseline, X, y)
     print(f'  Acc {ba.mean():.4f}+/-{ba.std():.4f}  F1 {bf.mean():.4f}+/-{bf.std():.4f}  MCC {bm.mean():.4f}+/-{bm.std():.4f}')
 
     print('Solution (LinearSVC + TF-IDF + char-ngram + stats), 10-fold CV')
-    sa, sf, sm = cv(make_solution, X, y)
+    sa, sf, sm = cv(tuned_solution, X, y)
     print(f'  Acc {sa.mean():.4f}+/-{sa.std():.4f}  F1 {sf.mean():.4f}+/-{sf.std():.4f}  MCC {sm.mean():.4f}+/-{sm.std():.4f}')
 
-    print('Wilcoxon signed-rank (two-tailed)')
+    print('Wilcoxon signed-rank (two-tailed) + rank-biserial effect size')
     rows = []
+    n = 10
+    total_rank_sum = n * (n + 1) / 2  # = 55
     for metric, b, s in [('Accuracy', ba, sa), ('Macro-F1', bf, sf), ('MCC', bm, sm)]:
         if np.allclose(b, s):
-            print(f'  {metric}: identical')
-            rows.append({'dataset': name, 'metric': metric, 'W': None, 'p': None, 'significant': False})
+            print(f'  {metric}: identical (|r|=1.0)')
+            rows.append({'dataset': name, 'metric': metric, 'W': None, 'p': None,
+                         'rank_biserial_r': 1.0, 'effect_size_label': 'large',
+                         'significant': False})
             continue
         W, p = wilcoxon(b, s)
+        # scipy returns W = min(W+, W-); rank-biserial |r| = |W+ - W-| / (W+ + W-)
+        r = abs((total_rank_sum - 2 * W) / total_rank_sum)
+        if r >= 0.5:
+            label = 'large'
+        elif r >= 0.3:
+            label = 'medium'
+        elif r >= 0.1:
+            label = 'small'
+        else:
+            label = 'negligible'
         sig = p < 0.05
-        print(f'  {metric}: W={W:.2f}  p={p:.4f}  {"significant" if sig else "not significant"}')
-        rows.append({'dataset': name, 'metric': metric, 'W': float(W), 'p': float(p), 'significant': sig})
+        print(f'  {metric}: W={W:.2f}  p={p:.4f}  |r|={r:.3f} ({label})  {"significant" if sig else "not significant"}')
+        rows.append({'dataset': name, 'metric': metric, 'W': float(W), 'p': float(p),
+                     'rank_biserial_r': round(float(r), 4), 'effect_size_label': label,
+                     'significant': sig})
 
     cv_df = pd.DataFrame({
         'fold': range(1, 11),
@@ -258,7 +301,7 @@ def run_dataset(name, X, y, classes, suptitle, with_ablation=True):
     print('Held-out 80/20')
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, stratify=y, random_state=SEED)
     timing = []
-    for label, mk in [('baseline', make_baseline), ('solution', make_solution)]:
+    for label, mk in [('baseline', make_baseline), ('solution', tuned_solution)]:
         clf = mk()
         t0 = time.perf_counter(); clf.fit(Xtr, ytr); t_fit = time.perf_counter() - t0
         t0 = time.perf_counter(); pred = clf.predict(Xte); t_pred = time.perf_counter() - t0
